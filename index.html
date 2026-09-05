@@ -1247,6 +1247,10 @@
         <div style="font-size:18px;font-weight:800;color:white;">אבידן קוטאי</div>
         <div style="font-size:11px;color:#666;margin-top:4px;">אפקון טכנולוגיות בע״מ • © כל הזכויות שמורות</div>
       </div>
+      <div style="background:white;border-radius:8px;padding:6px;display:flex;flex-direction:column;align-items:center;gap:4px;">
+        <div id="about-app-qr" style="width:84px;height:84px;"></div>
+        <div style="font-size:9px;font-weight:800;color:#111;letter-spacing:.3px;">סרוק לפתיחת האפליקציה</div>
+      </div>
     </div>
   </div>
 
@@ -4590,6 +4594,7 @@ setLocBcMode('barcode');
 setBcCharset('utf8');
 setBcType('pdf417', false);
 onLocOptToggle();
+renderQRImg(window.location.href, 'about-app-qr', 84);
 document.getElementById('it-date').value = new Date().toISOString().slice(0,10);
 document.getElementById('it-qty').value = 1;
 loadSavedItemQr();
