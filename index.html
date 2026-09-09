@@ -849,7 +849,9 @@
       <button type="button" onclick="bkExport()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#111;color:#fff;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬇ ייצא גיבוי</button>
       <button type="button" onclick="document.getElementById('bk-file').click()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#f0f0f0;color:#555;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬆ שחזר מגיבוי</button>
       <input type="file" id="bk-file" accept=".json,application/json" style="display:none" onchange="bkImport(this)">
+      <button type="button" onclick="selfCheck(true)" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#f0f0f0;color:#555;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">🩺 בדיקת תקינות</button>
     </div>
+    <div id="sc-info" style="font-size:11.5px;font-weight:700;margin-top:6px;"></div>
     <div id="sw-state" style="font-size:11.5px;font-weight:700;margin-top:8px;"></div>
     <div id="bk-info" style="display:none;font-size:11.5px;font-weight:700;color:#166534;margin-top:6px;"></div>
     <div style="font-size:11px;color:#9ca3af;line-height:1.6;margin-top:5px;">
@@ -7106,7 +7108,7 @@ let liveApplying = false;
 let liveTimer = null;
 let liveOutAt = 0, liveInAt = 0;      // מתי נשלח / התקבל בפעם האחרונה
 let liveOutRaw = '', liveInRaw = '', liveApplied = 0;
-const LIVE_VER = '5.8';   // מקור האמת היחיד למספר הגרסה
+const LIVE_VER = '5.9';   // מקור האמת היחיד למספר הגרסה
 const LIVE_KEY = 'afkon_live';
 
 /* שורת אבחון — מראה אם ההקלדה באמת יוצאת ונכנסת */
@@ -7489,6 +7491,122 @@ window.addEventListener('online',  swOnlineState);
 window.addEventListener('offline', swOnlineState);
 setInterval(swOnlineState, 3000);
 swOnlineState();
+
+/* ═══════════════════════════════════════════
+   בדיקת תקינות עצמית
+   שלושת הבאגים שעלו לנו הכי הרבה זמן היו שקטים:
+   מזהה כפול, משתנה שהוגדר פעמיים, וקבוע שנקרא לפני שהוגדר.
+   כאן הם צועקים במקום להיעלם.
+   ═══════════════════════════════════════════ */
+const SC = { errors:[], ran:false };
+
+/* ── 1. שגיאות סקריפט לא נתפסות ── */
+window.addEventListener('error', e=>{
+  const where = (e.filename ? String(e.filename).split('/').pop() : '') + (e.lineno ? ':' + e.lineno : '');
+  scReport('שגיאת סקריפט', (e.message || 'שגיאה') + (where ? '  [' + where + ']' : ''));
+});
+window.addEventListener('unhandledrejection', e=>{
+  const r = e.reason;
+  scReport('פעולה נכשלה', (r && (r.message || r.code)) || String(r));
+});
+
+function scReport(kind, msg){
+  SC.errors.push({ kind, msg, t:Date.now() });
+  scBar();
+}
+
+/* ── 2. פס אזהרה גלוי ── */
+function scBar(){
+  let bar = document.getElementById('sc-bar');
+  if(!bar){
+    bar = document.createElement('div');
+    bar.id = 'sc-bar';
+    bar.style.cssText = 'position:fixed;top:0;right:0;left:0;z-index:99999;background:#b91c1c;color:#fff;'
+      + 'padding:9px 14px;font-family:Heebo,sans-serif;font-size:12.5px;font-weight:700;direction:rtl;'
+      + 'display:flex;align-items:center;gap:10px;box-shadow:0 3px 12px rgba(0,0,0,.3);';
+    document.body.appendChild(bar);
+  }
+  const last = SC.errors[SC.errors.length-1] || {};
+  bar.innerHTML = '<span style="flex:1;">⚠ ' + esc(last.kind || '') + ': ' + esc(String(last.msg || '').slice(0,150))
+    + (SC.errors.length > 1 ? '  (' + SC.errors.length + ' תקלות)' : '') + '</span>'
+    + '<button onclick="selfCheck(true)" style="font-family:Heebo;font-size:11.5px;font-weight:700;background:#fff;color:#b91c1c;border:none;border-radius:5px;padding:5px 11px;cursor:pointer;">פירוט</button>'
+    + '<button onclick="document.getElementById(\'sc-bar\').remove()" style="background:transparent;border:none;color:#fff;font-size:16px;cursor:pointer;">×</button>';
+}
+
+/* ── 3. בדיקות מבניות ── */
+function scScan(){
+  const found = [];
+
+  // מזהים כפולים — getElementById יחזיר את הראשון, וקוד יעבוד על האלמנט הלא נכון
+  const seen = {}, dups = [];
+  document.querySelectorAll('[id]').forEach(el=>{
+    const id = el.id;
+    if(seen[id]) { if(dups.indexOf(id) === -1) dups.push(id); }
+    else seen[id] = 1;
+  });
+  if(dups.length) found.push({ kind:'מזהים כפולים', msg:dups.join(', ') });
+
+  // מטפלים מוטבעים שקוראים לפונקציה שאינה קיימת
+  const missing = [];
+  const attrs = ['onclick','onchange','oninput','onkeydown','onfocus','onmousedown'];
+  document.querySelectorAll('[' + attrs.join('],[') + ']').forEach(el=>{
+    attrs.forEach(a=>{
+      const v = el.getAttribute(a);
+      if(!v) return;
+      // רק קריאות לפונקציות גלובליות — לא מתודות כמו el.click() או document.getElementById()
+      const re = /(^|[^.\w$])([A-Za-z_$][\w$]*)\s*\(/g;
+      const skip = ['if','for','while','switch','return','function','typeof','new','this',
+                    'alert','confirm','prompt','catch','Number','String','parseInt','parseFloat'];
+      let m;
+      while((m = re.exec(v))){
+        const fn = m[2];
+        if(skip.indexOf(fn) !== -1) continue;
+        if(typeof window[fn] !== 'function' && missing.indexOf(fn) === -1) missing.push(fn);
+      }
+    });
+  });
+  if(missing.length) found.push({ kind:'פונקציות חסרות', msg:missing.join(', ') });
+
+  // אלמנטים קריטיים
+  const need = ['preview-area','tabs-bar','tab-tw','tab-sku','sync-panel'];
+  const gone = need.filter(id=>!document.getElementById(id));
+  if(gone.length) found.push({ kind:'אלמנטים חסרים', msg:gone.join(', ') });
+
+  // אחסון מקומי — כמה מקום תופסים הנתונים
+  let bytes = 0;
+  try{ bkKeys().forEach(k=> bytes += (localStorage.getItem(k) || '').length); }catch(e){}
+  const kb = Math.round(bytes/1024);
+  if(kb > 4000) found.push({ kind:'אחסון כמעט מלא', msg:kb + 'KB מתוך כ-5000KB. ייצא גיבוי ונקה היסטוריה.' });
+
+  return { found, kb };
+}
+
+function selfCheck(show){
+  const r = scScan();
+  SC.ran = true;
+  r.found.forEach(f=>{ if(!SC.errors.some(e=>e.kind === f.kind)) SC.errors.push(f); });
+  if(r.found.length) scBar();
+
+  if(show){
+    const lines = SC.errors.length
+      ? SC.errors.map((e,i)=> (i+1) + '. ' + e.kind + ':\n   ' + e.msg).join('\n\n')
+      : 'לא נמצאו תקלות.';
+    alert('בדיקת תקינות — גרסה ' + LIVE_VER + '\n'
+      + '────────────────────\n'
+      + lines + '\n\n'
+      + 'אחסון בשימוש: ' + r.kb + 'KB\n'
+      + 'מזהים בדף: ' + document.querySelectorAll('[id]').length);
+  }
+  const el = document.getElementById('sc-info');
+  if(el){
+    el.innerHTML = SC.errors.length
+      ? '<span style="color:#b91c1c;">⚠ ' + SC.errors.length + ' תקלות — לחץ "בדיקת תקינות" לפירוט</span>'
+      : '<span style="color:#166534;">✓ לא נמצאו תקלות · אחסון בשימוש ' + r.kb + 'KB</span>';
+  }
+  return r;
+}
+
+setTimeout(()=>{ try{ selfCheck(false); }catch(e){} }, 1500);
 
 </script>
 </body>
