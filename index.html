@@ -7108,7 +7108,7 @@ let liveApplying = false;
 let liveTimer = null;
 let liveOutAt = 0, liveInAt = 0;      // מתי נשלח / התקבל בפעם האחרונה
 let liveOutRaw = '', liveInRaw = '', liveApplied = 0;
-const LIVE_VER = '5.9';   // מקור האמת היחיד למספר הגרסה
+const LIVE_VER = '6.0';   // מקור האמת היחיד למספר הגרסה
 const LIVE_KEY = 'afkon_live';
 
 /* שורת אבחון — מראה אם ההקלדה באמת יוצאת ונכנסת */
@@ -7498,7 +7498,7 @@ swOnlineState();
    מזהה כפול, משתנה שהוגדר פעמיים, וקבוע שנקרא לפני שהוגדר.
    כאן הם צועקים במקום להיעלם.
    ═══════════════════════════════════════════ */
-const SC = { errors:[], ran:false };
+const SC = { errors:[], ran:false, external:0 };
 
 /* ── 1. שגיאות סקריפט לא נתפסות ── */
 window.addEventListener('error', e=>{
@@ -7537,13 +7537,21 @@ function scBar(){
 function scScan(){
   const found = [];
 
-  // מזהים כפולים — getElementById יחזיר את הראשון, וקוד יעבוד על האלמנט הלא נכון
-  const seen = {}, dups = [];
+  /* מזהים כפולים — getElementById יחזיר את הראשון, וקוד יעבוד על האלמנט הלא נכון.
+     נספרים רק אלמנטים של האפליקציה: תוספי דפדפן מזריקים אלמנטים לדף
+     ויצרו כאן התראות שווא. */
+  const OURS = '.panel, #tabs-bar, #preview-area, #sync-panel, #global-toolbar, #tw-print-root, [id^="tab-"]';
+  const isOurs = el => !!(el.closest && (el.closest(OURS) || el.matches(OURS)))
+                    || /^(tw|sku|sync|tpl|bk|sc|sz|f|c|l|it|live|mode|row|desc|qty|makat|items|preview|global|history|proj)-?/.test(el.id);
+
+  const count = {}, dups = [];
+  let external = 0;
   document.querySelectorAll('[id]').forEach(el=>{
-    const id = el.id;
-    if(seen[id]) { if(dups.indexOf(id) === -1) dups.push(id); }
-    else seen[id] = 1;
+    if(!isOurs(el)){ external++; return; }
+    count[el.id] = (count[el.id] || 0) + 1;
+    if(count[el.id] === 2) dups.push(el.id);
   });
+  SC.external = external;
   if(dups.length) found.push({ kind:'מזהים כפולים', msg:dups.join(', ') });
 
   // מטפלים מוטבעים שקוראים לפונקציה שאינה קיימת
@@ -7595,7 +7603,8 @@ function selfCheck(show){
       + '────────────────────\n'
       + lines + '\n\n'
       + 'אחסון בשימוש: ' + r.kb + 'KB\n'
-      + 'מזהים בדף: ' + document.querySelectorAll('[id]').length);
+      + 'מזהים באפליקציה: ' + (document.querySelectorAll('[id]').length - (SC.external || 0))
+      + (SC.external ? '\nאלמנטים חיצוניים שנוטרלו מהבדיקה (תוספי דפדפן): ' + SC.external : ''));
   }
   const el = document.getElementById('sc-info');
   if(el){
