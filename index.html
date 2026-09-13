@@ -848,7 +848,7 @@
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <button type="button" onclick="bkExport()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#111;color:#fff;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬇ ייצא גיבוי</button>
       <button type="button" onclick="document.getElementById('bk-file').click()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#f0f0f0;color:#555;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬆ שחזר מגיבוי</button>
-      <input type="file" id="bk-file" accept=".json,application/json" style="display:none" onchange="bkImport(this)">
+      <input type="file" id="bk-file" accept=".json,.txt,application/json,text/plain,*/*" style="display:none" onchange="bkImport(this)">
       <button type="button" onclick="selfCheck(true)" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#f0f0f0;color:#555;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">🩺 בדיקת תקינות</button>
     </div>
     <div id="sc-info" style="font-size:11.5px;font-weight:700;margin-top:6px;"></div>
@@ -4973,6 +4973,17 @@ loadSavedItemQr();
       try{ ref.set(gatherBundle()).then(()=>setStatus('synced')).catch(()=>setStatus('error')); }catch(e){ setStatus('error'); }
       return;
     }
+    /* אחרי שחזור מגיבוי — המצב המקומי הוא הנכון.
+       דוחפים אותו לענן פעם אחת במקום לקבל את הישן. */
+    try{
+      if(localStorage.getItem('afkon_after_restore')){
+        localStorage.removeItem('afkon_after_restore');
+        setStatus('syncing');
+        setTimeout(()=>{ try{ ref.set(gatherBundle()).then(()=>setStatus('synced')); }catch(e){} }, 300);
+        return;
+      }
+    }catch(e){}
+
     window._syncDiag.anyIn = Date.now();
     window._syncDiag.lastDev = String(b._device || '').slice(0,6);
     if(b._device === deviceId){ setStatus('synced'); return; } // הד של כתיבה שלנו — להתעלם
@@ -7108,7 +7119,7 @@ let liveApplying = false;
 let liveTimer = null;
 let liveOutAt = 0, liveInAt = 0;      // מתי נשלח / התקבל בפעם האחרונה
 let liveOutRaw = '', liveInRaw = '', liveApplied = 0;
-const LIVE_VER = '6.0';   // מקור האמת היחיד למספר הגרסה
+const LIVE_VER = '6.2';   // מקור האמת היחיד למספר הגרסה
 const LIVE_KEY = 'afkon_live';
 
 /* שורת אבחון — מראה אם ההקלדה באמת יוצאת ונכנסת */
@@ -7264,13 +7275,19 @@ function bkKeys(){
   return out;
 }
 
+/* מפתחות שלא נכנסים לגיבוי: תוכן טופס רגעי, ומזהי המכשיר */
+const BK_SKIP = ['afkon_live','afkon_live_on'];
+
 function bkExport(){
   const data = { _app:'afkon-labels', _ver:LIVE_VER, _at:new Date().toISOString(), items:{} };
-  bkKeys().forEach(k=>{ try{ data.items[k] = localStorage.getItem(k); }catch(e){} });
+  bkKeys().forEach(k=>{
+    if(BK_SKIP.indexOf(k) !== -1) return;
+    try{ data.items[k] = localStorage.getItem(k); }catch(e){}
+  });
   const n = Object.keys(data.items).length;
   if(!n){ alert('אין נתונים לגיבוי'); return; }
 
-  const blob = new Blob([JSON.stringify(data, null, 1)], { type:'application/json' });
+  const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
   a.href = url;
@@ -7285,19 +7302,55 @@ function bkImport(input){
   if(!f) return;
   const rd = new FileReader();
   rd.onload = e=>{
-    let data = null;
-    try{ data = JSON.parse(e.target.result); }catch(err){ alert('הקובץ אינו קובץ גיבוי תקין'); input.value=''; return; }
+    let data = null, txt = String(e.target.result || '');
+    txt = txt.replace(/^\uFEFF/, '').trim();            // BOM שנוסף בהעברה
+    const a = txt.indexOf('{'), b = txt.lastIndexOf('}');
+    if(a > 0 || (b > -1 && b < txt.length-1)) txt = txt.slice(a, b+1);   // טקסט עוטף שנוסף
+    try{ data = JSON.parse(txt); }
+    catch(err){
+      alert('לא הצלחתי לקרוא את הקובץ.\n\nייתכן שהוא נפגם בהעברה. נסה לשלוח אותו כקובץ מצורף (Document) ולא כטקסט, או דרך מייל / AirDrop.');
+      input.value=''; return;
+    }
     if(!data || data._app !== 'afkon-labels' || !data.items){
       alert('הקובץ אינו גיבוי של האפליקציה הזו'); input.value=''; return;
     }
-    const keys = Object.keys(data.items);
+    let keys = Object.keys(data.items);
+    const items = data.items['afkon_items'];
+    let nItems = 0;
+    try{ nItems = (JSON.parse(items || '{}').items || []).length; }catch(e){}
+
     if(!confirm('הגיבוי מכיל ' + keys.length + ' רשומות מתאריך '
         + (data._at ? new Date(data._at).toLocaleString('he-IL') : 'לא ידוע')
-        + '.\n\nהשחזור ידרוס את הנתונים הנוכחיים במכשיר. להמשיך?')) { input.value=''; return; }
+        + (nItems ? '\nכולל קטלוג של ' + nItems + ' פריטים.' : '\n⚠ הגיבוי אינו כולל קטלוג פריטים.')
+        + '\n\nהשחזור ידרוס את הנתונים הנוכחיים במכשיר. להמשיך?')) { input.value=''; return; }
 
-    keys.forEach(k=>{ try{ localStorage.setItem(k, data.items[k]); }catch(err){} });
-    bkInfo('✓ שוחזרו ' + keys.length + ' רשומות — טוען מחדש…');
-    setTimeout(()=>location.reload(), 900);
+    // הגדרות הסנכרון של המכשיר הזה נשמרות כברירת מחדל,
+    // אחרת שחזור מגיבוי של טלפון היה מנתק את המחשב מהחדר שלו
+    const syncKeys = ['afkon_fb_cfg','afkon_sync_code'];
+    const hasSync  = syncKeys.some(k=> keys.indexOf(k) !== -1);
+    let takeSync = false;
+    if(hasSync) takeSync = confirm('לשחזר גם את הגדרות הסנכרון מהגיבוי?\n\n'
+      + 'אישור — המכשיר יתחבר לחדר שבגיבוי.\n'
+      + 'ביטול — יישארו הגדרות הסנכרון הנוכחיות של המכשיר הזה (מומלץ).');
+    if(!takeSync) keys = keys.filter(k=> syncKeys.indexOf(k) === -1);
+
+    let failed = [];
+    keys.forEach(k=>{
+      try{ localStorage.setItem(k, data.items[k]); }
+      catch(err){ failed.push(k); }
+    });
+    if(failed.length){
+      alert('⚠ ' + failed.length + ' רשומות לא נשמרו — האחסון בדפדפן מלא.\n\n'
+        + 'רשומות שנכשלו: ' + failed.join(', ') + '\n\n'
+        + 'נקה היסטוריית הדפסות ונסה שוב.');
+    }
+
+    // לאחר הטעינה מחדש: לדחוף את המצב המשוחזר לענן במקום לתת לענן לדרוס אותו
+    try{ localStorage.setItem('afkon_after_restore','1'); }catch(e){}
+
+    bkInfo((failed.length ? '⚠ ' : '✓ ') + 'שוחזרו ' + (keys.length - failed.length) + ' מתוך ' + keys.length + ' רשומות'
+      + (nItems ? ' · ' + nItems + ' פריטים בקטלוג' : '') + ' — טוען מחדש…');
+    setTimeout(()=>location.reload(), 1200);
   };
   rd.readAsText(f);
   input.value = '';
