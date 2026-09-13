@@ -2977,12 +2977,36 @@ function loadExcel(input){
       catalogMap[mk]=ds;
       count++;
     });
-    // שמור ב-localStorage
-    const meta={ fileName, count, date: new Date().toLocaleDateString('he-IL'), map: catalogMap };
-    try{ localStorage.setItem('afkon_catalog', JSON.stringify(meta)); }catch(e){}
-    showCatalogLoaded(fileName, count, meta.date);
+    // שמירה ב-localStorage — בפורמט קומפקטי, עם דיווח על כישלון
+    saveCatalog(fileName, count);
+    showCatalogLoaded(fileName, count, new Date().toLocaleDateString('he-IL'));
   };
   reader.readAsArrayBuffer(file);
+}
+
+/* שמירת הקטלוג. זוגות במערך תופסים כמחצית מאובייקט עם מפתחות,
+   וזה ההבדל בין קטלוג שנשמר לקטלוג שנופל על מכסת האחסון. */
+function saveCatalog(fileName, count){
+  const pairs = Object.keys(catalogMap).map(k=>[k, catalogMap[k]]);
+  const meta  = { fileName, count, date:new Date().toLocaleDateString('he-IL'), pairs };
+  try{
+    localStorage.setItem('afkon_catalog', JSON.stringify(meta));
+    return true;
+  }catch(e){
+    // ניסיון שני: בלי תיאורים ארוכים
+    try{
+      meta.pairs = pairs.map(p=>[p[0], String(p[1]).slice(0,60)]);
+      localStorage.setItem('afkon_catalog', JSON.stringify(meta));
+      alert('⚠ הקטלוג נשמר עם תיאורים מקוצרים — האחסון בדפדפן כמעט מלא.\n'
+        + 'מומלץ לייצא גיבוי ולנקות היסטוריית הדפסות.');
+      return true;
+    }catch(e2){
+      alert('❌ הקטלוג לא נשמר — האחסון בדפדפן מלא.\n\n'
+        + count + ' פריטים לא יישמרו ולא ייכללו בגיבוי.\n'
+        + 'נקה היסטוריית הדפסות בלשונית אודות, וטען את הקטלוג מחדש.');
+      return false;
+    }
+  }
 }
 
 function showCatalogLoaded(fileName, count, date){
@@ -3008,8 +3032,10 @@ function loadSavedCatalog(){
     const raw=localStorage.getItem('afkon_catalog');
     if(!raw) return;
     const meta=JSON.parse(raw);
-    catalogMap=meta.map||{};
-    showCatalogLoaded(meta.fileName, meta.count, meta.date);
+    catalogMap = {};
+    if(Array.isArray(meta.pairs))      meta.pairs.forEach(p=>{ catalogMap[p[0]] = p[1]; });
+    else if(meta.map && typeof meta.map === 'object') catalogMap = meta.map;   // פורמט ישן
+    showCatalogLoaded(meta.fileName, meta.count || Object.keys(catalogMap).length, meta.date);
   }catch(e){}
 }
 
@@ -4958,6 +4984,7 @@ loadSavedItemQr();
       try{ renderHistory(); }catch(e){}
       try{ const c = localStorage.getItem('afkon_print_cal'); if(c){ printCal = JSON.parse(c); applyPrintCal(); updateCalUI(); } }catch(e){}
       try{ const sz = localStorage.getItem('afkon_size'); if(sz && typeof setLabelSize === 'function' && sz !== currentSize) setLabelSize(sz); }catch(e){}
+      try{ if(b['afkon_catalog'] != null && typeof loadSavedCatalog === 'function') loadSavedCatalog(); }catch(e){}
       try{ if(typeof liveApply === 'function') liveApply(b['afkon_live']); }catch(e){}
       try{ if(b['afkon_items'] != null && typeof skuRestoreCatalog === 'function') skuRestoreCatalog(); }catch(e){}
       try{ if(b['afkon_templates'] != null && typeof tplLoadAll === 'function'){ tplLoadAll(); tplRender('tw'); tplRender('sku'); } }catch(e){}
@@ -7119,7 +7146,7 @@ let liveApplying = false;
 let liveTimer = null;
 let liveOutAt = 0, liveInAt = 0;      // מתי נשלח / התקבל בפעם האחרונה
 let liveOutRaw = '', liveInRaw = '', liveApplied = 0;
-const LIVE_VER = '6.2';   // מקור האמת היחיד למספר הגרסה
+const LIVE_VER = '6.3';   // מקור האמת היחיד למספר הגרסה
 const LIVE_KEY = 'afkon_live';
 
 /* שורת אבחון — מראה אם ההקלדה באמת יוצאת ונכנסת */
@@ -7287,6 +7314,14 @@ function bkExport(){
   const n = Object.keys(data.items).length;
   if(!n){ alert('אין נתונים לגיבוי'); return; }
 
+  let nCat = 0;
+  try{
+    const c = JSON.parse(data.items['afkon_catalog'] || '{}');
+    nCat = Array.isArray(c.pairs) ? c.pairs.length : Object.keys(c.map || {}).length;
+  }catch(e){}
+  if(!nCat && !confirm('⚠ קטלוג המק״טים אינו נמצא באחסון ולכן לא ייכלל בגיבוי.\n\n'
+      + 'טען אותו מחדש (ניהול מערכת ← קטלוגים מאקסל) וגבה שוב, או המשך בלעדיו.\n\nלהמשיך?')) return;
+
   const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');
@@ -7315,13 +7350,17 @@ function bkImport(input){
       alert('הקובץ אינו גיבוי של האפליקציה הזו'); input.value=''; return;
     }
     let keys = Object.keys(data.items);
-    const items = data.items['afkon_items'];
-    let nItems = 0;
-    try{ nItems = (JSON.parse(items || '{}').items || []).length; }catch(e){}
+    let nItems = 0, nCat = 0;
+    try{ nItems = (JSON.parse(data.items['afkon_items'] || '{}').items || []).length; }catch(e){}
+    try{
+      const c = JSON.parse(data.items['afkon_catalog'] || '{}');
+      nCat = Array.isArray(c.pairs) ? c.pairs.length : Object.keys(c.map || {}).length;
+    }catch(e){}
 
     if(!confirm('הגיבוי מכיל ' + keys.length + ' רשומות מתאריך '
         + (data._at ? new Date(data._at).toLocaleString('he-IL') : 'לא ידוע')
-        + (nItems ? '\nכולל קטלוג של ' + nItems + ' פריטים.' : '\n⚠ הגיבוי אינו כולל קטלוג פריטים.')
+        + '\n\nקטלוג מק״טים ראשי: ' + (nCat ? nCat + ' פריטים' : '⚠ לא קיים בגיבוי')
+        + '\nקטלוג לשונית דף פריט: ' + (nItems ? nItems + ' פריטים' : '⚠ לא קיים בגיבוי')
         + '\n\nהשחזור ידרוס את הנתונים הנוכחיים במכשיר. להמשיך?')) { input.value=''; return; }
 
     // הגדרות הסנכרון של המכשיר הזה נשמרות כברירת מחדל,
@@ -7348,6 +7387,7 @@ function bkImport(input){
     // לאחר הטעינה מחדש: לדחוף את המצב המשוחזר לענן במקום לתת לענן לדרוס אותו
     try{ localStorage.setItem('afkon_after_restore','1'); }catch(e){}
 
+    try{ if(typeof loadSavedCatalog === 'function') loadSavedCatalog(); }catch(e){}
     bkInfo((failed.length ? '⚠ ' : '✓ ') + 'שוחזרו ' + (keys.length - failed.length) + ' מתוך ' + keys.length + ' רשומות'
       + (nItems ? ' · ' + nItems + ' פריטים בקטלוג' : '') + ' — טוען מחדש…');
     setTimeout(()=>location.reload(), 1200);
