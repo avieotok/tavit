@@ -853,6 +853,19 @@
     </div>
     <div id="sc-info" style="font-size:11.5px;font-weight:700;margin-top:6px;"></div>
     <div id="sw-state" style="font-size:11.5px;font-weight:700;margin-top:8px;"></div>
+
+    <div style="border-top:1px solid #eee;margin-top:12px;padding-top:12px;">
+      <div style="font-size:11px;font-weight:700;color:#888;letter-spacing:.6px;margin-bottom:8px;">קטלוג המק״טים — העברה ישירה</div>
+      <div id="cat-state" style="font-size:11.5px;font-weight:700;color:#374151;background:#f8f8f8;border-radius:8px;padding:9px 12px;line-height:1.9;margin-bottom:8px;"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <button type="button" onclick="catExportCSV()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#0891b2;color:#fff;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬇ ייצוא קטלוג (CSV)</button>
+        <button type="button" onclick="document.getElementById('cat-file').click()" style="font-family:Heebo;font-size:12.5px;font-weight:700;background:#f0f0f0;color:#555;border:none;border-radius:6px;padding:10px 16px;cursor:pointer;">⬆ ייבוא קטלוג</button>
+        <input type="file" id="cat-file" accept=".csv,.xlsx,.xls,text/csv,*/*" style="display:none" onchange="catImportFile(this)">
+      </div>
+      <div style="font-size:11px;color:#9ca3af;line-height:1.6;margin-top:5px;">
+        קובץ קטן שמכיל מק״ט ותיאור בלבד. לא תלוי בגיבוי, בסנכרון או במכסת האחסון — הדרך הבטוחה להעביר קטלוג בין מכשירים.
+      </div>
+    </div>
     <div id="bk-info" style="display:none;font-size:11.5px;font-weight:700;color:#166534;margin-top:6px;"></div>
     <div style="font-size:11px;color:#9ca3af;line-height:1.6;margin-top:5px;">
       הגיבוי כולל את הקטלוג, ההיסטוריה, התבניות, הגדרות הסנכרון והעיצובים. שמור אותו מחוץ למכשיר — דפדפנים מוחקים אחסון מקומי כשנגמר מקום.
@@ -4964,6 +4977,18 @@ loadSavedItemQr();
     return { json: JSON.stringify(out.slice(0, cap)), count: out.length };
   }
 
+  /* ספירת פריטים בקטלוג, בכל אחד מהפורמטים */
+  function catCount(raw){
+    if(!raw) return 0;
+    try{
+      const o = JSON.parse(raw);
+      if(Array.isArray(o.pairs)) return o.pairs.length;      // קטלוג מק"טים ראשי
+      if(Array.isArray(o.items)) return o.items.length;      // קטלוג דף פריט
+      if(o.map && typeof o.map === 'object') return Object.keys(o.map).length;  // פורמט ישן
+    }catch(e){}
+    return 0;
+  }
+
   function applyRemote(b){
     applying = true;
     let addedToLocal = false, remoteBroughtNew = false;
@@ -4976,6 +5001,13 @@ loadSavedItemQr();
           let remoteCount = 0; try{ remoteCount = (JSON.parse(b[k])||[]).length; }catch(e){}
           if(m.count > remoteCount) addedToLocal = true;     // אצלנו יש רשומות שאין בענן
           if(m.count > localCount)  remoteBroughtNew = true; // הענן הביא רשומות חדשות אלינו
+        } else if(k === 'afkon_catalog' || k === 'afkon_items'){
+          /* קטלוגים: אף פעם לא מוחקים קטלוג מקומי בגלל חבילה ריקה מהענן.
+             מכשיר שהקטלוג שלו לא נטען היה מוחק אותו אצל כולם. */
+          const lc = catCount(localStorage.getItem(k));
+          const rc = catCount(b[k]);
+          if(rc > lc){ origSet(k, b[k]); remoteBroughtNew = true; }
+          else if(lc > rc){ addedToLocal = true; }          // אצלנו הקטלוג גדול יותר — נדחוף אותו
         } else if(b[k] != null){
           origSet(k, b[k]);
         }
@@ -7146,7 +7178,7 @@ let liveApplying = false;
 let liveTimer = null;
 let liveOutAt = 0, liveInAt = 0;      // מתי נשלח / התקבל בפעם האחרונה
 let liveOutRaw = '', liveInRaw = '', liveApplied = 0;
-const LIVE_VER = '6.4';   // מקור האמת היחיד למספר הגרסה
+const LIVE_VER = '6.6';   // מקור האמת היחיד למספר הגרסה
 const LIVE_KEY = 'afkon_live';
 
 /* שורת אבחון — מראה אם ההקלדה באמת יוצאת ונכנסת */
@@ -7771,6 +7803,113 @@ function selfCheck(show){
 }
 
 setTimeout(()=>{ try{ selfCheck(false); }catch(e){} }, 1500);
+
+/* ═══════════════════════════════════════════
+   העברת קטלוג ישירה — קובץ CSV קטן,
+   בלי תלות בגיבוי, בסנכרון או במכסת האחסון.
+   ═══════════════════════════════════════════ */
+function catState(){
+  const mem = Object.keys(catalogMap || {}).length;
+  let store = 0, bytes = 0;
+  try{
+    const raw = localStorage.getItem('afkon_catalog') || '';
+    bytes = raw.length;
+    const o = JSON.parse(raw || '{}');
+    store = Array.isArray(o.pairs) ? o.pairs.length : Object.keys(o.map || {}).length;
+  }catch(e){}
+  let sku = 0;
+  try{ sku = Object.keys(skuMap || {}).length; }catch(e){}
+  return { mem, store, sku, kb:Math.round(bytes/1024) };
+}
+
+function catShowState(){
+  const el = document.getElementById('cat-state');
+  if(!el) return;
+  const c = catState();
+  const ok = (c.mem && c.mem === c.store);
+  el.innerHTML =
+      '<div>בזיכרון האפליקציה: <strong>' + c.mem + '</strong> מק״טים</div>'
+    + '<div>שמור באחסון הדפדפן: <strong>' + c.store + '</strong> מק״טים (' + c.kb + 'KB)</div>'
+    + '<div>קטלוג לשונית דף פריט: <strong>' + c.sku + '</strong> פריטים</div>'
+    + (ok ? '<div style="color:#166534;">✓ הקטלוג שמור ויעבור בגיבוי ובסנכרון</div>'
+     : c.mem && !c.store ? '<div style="color:#b91c1c;">⚠ הקטלוג פעיל אך לא נשמר באחסון — הוא ייעלם ברענון. ייצא אותו לקובץ CSV.</div>'
+     : !c.mem && c.store ? '<div style="color:#b45309;">הקטלוג באחסון אך לא נטען — רענן את הדף.</div>'
+     : !c.mem ? '<div style="color:#b45309;">אין קטלוג טעון במכשיר הזה.</div>'
+     : '<div style="color:#b45309;">אי־התאמה בין הזיכרון לאחסון — ייצא לקובץ CSV והעבר כך.</div>');
+}
+
+/* ייצוא הקטלוג לקובץ CSV — מה שפעיל בזיכרון */
+function catExportCSV(){
+  const keys = Object.keys(catalogMap || {});
+  if(!keys.length){ alert('אין קטלוג טעון לייצוא'); return; }
+  const esc2 = v => '"' + String(v == null ? '' : v).replace(/"/g,'""') + '"';
+  const csv = '\uFEFF' + 'makat,description\n'
+            + keys.map(k=> esc2(k) + ',' + esc2(catalogMap[k])).join('\n');
+  const blob = new Blob([csv], { type:'text/csv;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'catalog-' + keys.length + '-items-' + new Date().toISOString().slice(0,10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+  alert('✓ יוצאו ' + keys.length + ' מק״טים לקובץ CSV.\n\n'
+    + 'שלח אותו למכשיר השני וטען שם דרך "⬆ ייבוא קטלוג".');
+}
+
+/* ייבוא הקטלוג מקובץ CSV או אקסל */
+function catImportFile(input){
+  const f = input.files[0];
+  if(!f) return;
+  const done = pairs=>{
+    if(!pairs.length){ alert('לא נמצאו מק״טים בקובץ'); input.value=''; return; }
+    catalogMap = {};
+    pairs.forEach(p=>{ const k = String(p[0]||'').trim(); if(k) catalogMap[k] = String(p[1]||'').trim(); });
+    const n = Object.keys(catalogMap).length;
+    const saved = saveCatalog(f.name, n);
+    showCatalogLoaded(f.name, n, new Date().toLocaleDateString('he-IL'));
+    catShowState();
+    alert('✓ נטענו ' + n + ' מק״טים' + (saved ? ' ונשמרו במכשיר.' : '.\n⚠ לא נשמרו באחסון — יעבדו עד רענון הדף.'));
+    input.value = '';
+  };
+
+  if(/\.csv$/i.test(f.name)){
+    const rd = new FileReader();
+    rd.onload = e=>{
+      const txt = String(e.target.result || '').replace(/^\uFEFF/,'');
+      const rows = txt.split(/\r?\n/).filter(l=>l.trim()!=='');
+      const pairs = [];
+      rows.forEach((line,i)=>{
+        const cells = line.match(/("([^"]|"")*"|[^,]*)(,|$)/g) || [];
+        const cl = cells.map(c=> c.replace(/,$/,'').replace(/^"|"$/g,'').replace(/""/g,'"').trim());
+        if(i === 0 && /makat|מק/i.test(cl[0] || '')) return;    // שורת כותרות
+        if(cl[0]) pairs.push([cl[0], cl[1] || '']);
+      });
+      done(pairs);
+    };
+    rd.readAsText(f, 'UTF-8');
+  } else {
+    const rd = new FileReader();
+    rd.onload = e=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type:'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const rows = XLSX.utils.sheet_to_json(ws, { header:1, defval:'', raw:false });
+        const pairs = [];
+        rows.forEach((r,i)=>{
+          const mk = String(r[0] ?? '').trim();
+          if(!mk) return;
+          if(i === 0 && isNaN(mk) && /[א-ת]/.test(mk)) return;
+          pairs.push([mk, String(r[1] ?? '').trim()]);
+        });
+        done(pairs);
+      }catch(err){ alert('שגיאה בקריאת הקובץ: ' + (err.message || err)); input.value=''; }
+    };
+    rd.readAsArrayBuffer(f);
+  }
+}
+
+setTimeout(catShowState, 1800);
+setInterval(catShowState, 5000);
 
 </script>
 </body>
